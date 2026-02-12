@@ -4,8 +4,14 @@ import { useScroll, useMotionValueEvent } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
 const FRAME_COUNT = 120;
-const CANVAS_WIDTH = 1920;
-const CANVAS_HEIGHT = 1080;
+const MOBILE_FRAME_COUNT = 60; // Use fewer frames on mobile
+
+// Detect mobile device
+const isMobile = () => {
+    if (typeof window === 'undefined') return false;
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+        || window.innerWidth < 768;
+};
 
 export default function TeaScroll({
     setLoadingProgress,
@@ -15,30 +21,38 @@ export default function TeaScroll({
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [images, setImages] = useState<HTMLImageElement[]>([]);
     const [isLoaded, setIsLoaded] = useState(false);
+    const [mobile, setMobile] = useState(false);
     const { scrollYProgress } = useScroll();
+    const lastFrameRef = useRef(-1);
 
-    // Load Images
+    // Detect mobile on mount
+    useEffect(() => {
+        setMobile(isMobile());
+    }, []);
+
+    // Load Images with optimized count for mobile
     useEffect(() => {
         let loadedCount = 0;
         const imgArray: HTMLImageElement[] = [];
+        const totalFrames = mobile ? MOBILE_FRAME_COUNT : FRAME_COUNT;
+        const frameStep = mobile ? 2 : 1; // Skip every other frame on mobile
 
-        for (let i = 1; i <= FRAME_COUNT; i++) {
+        for (let i = 1; i <= FRAME_COUNT; i += frameStep) {
             const img = new Image();
-            // Adjust path format as needed (e.g., /sequence/ezgif-frame-001.jpg)
             const frameNumber = i.toString().padStart(3, "0");
             img.src = `/sequence/ezgif-frame-${frameNumber}.jpg`;
 
             img.onload = () => {
                 loadedCount++;
-                setLoadingProgress(Math.round((loadedCount / FRAME_COUNT) * 100));
-                if (loadedCount === FRAME_COUNT) {
+                setLoadingProgress(Math.round((loadedCount / totalFrames) * 100));
+                if (loadedCount === totalFrames) {
                     setIsLoaded(true);
                 }
             };
             imgArray.push(img);
         }
         setImages(imgArray);
-    }, [setLoadingProgress]);
+    }, [setLoadingProgress, mobile]);
 
     // Render Frame
     const renderFrame = (index: number) => {
@@ -69,30 +83,45 @@ export default function TeaScroll({
         if (isLoaded) renderFrame(0);
     }, [isLoaded]);
 
-    // Scroll Listener
+    // Scroll Listener with throttling for mobile
     useMotionValueEvent(scrollYProgress, "change", (latest) => {
         if (!isLoaded) return;
+
+        const totalFrames = images.length;
         const frameIndex = Math.min(
-            FRAME_COUNT - 1,
-            Math.floor(latest * FRAME_COUNT)
+            totalFrames - 1,
+            Math.floor(latest * totalFrames)
         );
+
+        // Skip rendering if frame hasn't changed (performance optimization)
+        if (frameIndex === lastFrameRef.current) return;
+        lastFrameRef.current = frameIndex;
+
         requestAnimationFrame(() => renderFrame(frameIndex));
     });
 
-    // Handle Resize
+    // Handle Resize with mobile optimization
     useEffect(() => {
         const handleResize = () => {
             if (canvasRef.current) {
-                // Set actual canvas size to window size for sharp rendering
-                const dpr = window.devicePixelRatio || 1;
+                const currentMobile = isMobile();
+
+                // Reduce DPR on mobile to save GPU memory and processing
+                const dpr = currentMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+
                 canvasRef.current.width = window.innerWidth * dpr;
                 canvasRef.current.height = window.innerHeight * dpr;
 
-                // Use high quality image smoothing
+                // Use lower quality smoothing on mobile
                 const ctx = canvasRef.current.getContext('2d');
                 if (ctx) {
                     ctx.imageSmoothingEnabled = true;
-                    ctx.imageSmoothingQuality = "high";
+                    ctx.imageSmoothingQuality = currentMobile ? "low" : "high";
+                }
+
+                // Re-render current frame
+                if (isLoaded && lastFrameRef.current >= 0) {
+                    renderFrame(lastFrameRef.current);
                 }
             }
         };
@@ -101,7 +130,7 @@ export default function TeaScroll({
         handleResize(); // Initial size
 
         return () => window.removeEventListener('resize', handleResize);
-    }, [isLoaded]);
+    }, [isLoaded, images]);
 
     return (
         <div className="h-[600vh] w-full relative">
@@ -109,7 +138,9 @@ export default function TeaScroll({
                 <canvas
                     ref={canvasRef}
                     className="w-full h-full object-contain"
-                // Style width/height handled by CSS, attributes for resolution
+                    style={{
+                        willChange: 'auto', // Disable will-change on mobile for better performance
+                    }}
                 />
             </div>
         </div>
